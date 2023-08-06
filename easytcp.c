@@ -4,38 +4,88 @@
  * SPDX-License-Identifier: BSD-3-Clause
  * 
  * An "interface" to make project code cleaner by abstraction
- * when using TCP communication through the LWIP library.
+ * when using WIFI on pico and TCP communication through the LWIP library.
  * 
  * Based on pico-examples from Raspberry Pi
  * 
  * Written by: Benjamin Modica 2023
  */
 
-#include <stdlib.h>
-#include <string.h>
-
-#include "pico/stdlib.h"
-#include "pico/cyw43_arch.h"
-
-#include "lwip/pbuf.h"
-#include "lwip/tcp.h"
-
+#include "easytcp.h"
 #include "secrets.h"
 
-#define TCP_PORT 4242
-#define BUF_SIZE_SENT 1
-#define BUF_SIZE_RECV 1
-#define POLL_TIME_S 60
+/**
+ * De-initialize easytcp, what more to do? 
+*/
+int easytcp_deinit(void *arg) {
+    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
 
-typedef struct TCP_SERVER_T_ {
-    struct tcp_pcb *server_pcb; //Server protocol control block, containing information about the connection
-    struct tcp_pcb *client_pcb; //Client protocol control block
-    uint8_t buffer_sent[BUF_SIZE_SENT];
-    uint8_t buffer_recv[BUF_SIZE_RECV]; 
-    int sent_len;
-    int recv_len;
-    int run_count;
-} TCP_SERVER_T;
+    if (state->server_pcb) {
+        tcp_arg(state->server_pcb, NULL);
+        tcp_close(state->server_pcb);
+        state->server_pcb = NULL;
+    }
+
+    cyw43_arch_deinit();
+    free(state);
+}
+
+/**
+ * Init for easytcp library and settings
+*/
+TCP_SERVER_T* easytcp_init() {
+
+    if (cyw43_arch_init()) {
+        printf("failed to initialise CYW43 architecture\n");
+        return NULL;
+    }
+
+    cyw43_arch_enable_sta_mode(); //Enable wifi station mode
+
+    printf("Connecting to Wi-Fi...\n");
+    if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 30000)) {
+        printf("failed to connect.\n");
+        return NULL;
+    } else {
+        printf("Connected.\n");
+    }
+
+    TCP_SERVER_T *state= run_tcp_server();
+     if (!state) {
+        printf("Failed to run TCP server");
+        return NULL;
+    }
+    
+    return state;
+}
+
+/**
+ * Function for sending data to client
+ * 
+ * Returns true if data was sent
+ * Returns false if no client is connected to receive data
+*/
+bool easytcp_send_data(void *arg, uint8_t data) {
+    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+    if (is_client_connected(state)){
+        tcp_server_send_data(state, state->client_pcb, data);
+        return true;
+    } else {
+        printf("No client connected, cannot send data\n");
+        return false;
+    }
+}
+
+bool is_client_connected(void *arg) {
+    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+    if  (state->client_pcb != NULL) {
+        printf("client connected\n");
+        return true;
+    } else {
+        printf("client not connected\n");
+        return false;
+    }
+}
 
 /**
  * Allocate space for tcp struct and return pointer to struct
@@ -114,16 +164,46 @@ err_t tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t len) {
 /**
  * Callback function when data has been received
 */
-err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {}
+err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
+    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+    if (!p) {
+        printf("No main packet buffer struct\n\r");
+        return tcp_server_result(arg, -1);
+    }
+    // this method is callback from lwIP, so cyw43_arch_lwip_begin is not required, however you
+    // can use this method to cause an assertion in debug mode, if this method is called then
+    // cyw43_arch_lwip_begin IS needed
+    cyw43_arch_lwip_check();
+    if (p->tot_len > 0) {
+        //printf("tcp_server_recv %d/%d err %d\n", p->tot_len, state->recv_len, err);
+
+        // Receive the buffer
+        const uint16_t buffer_left = BUF_SIZE_RECV - state->recv_len;
+        state->recv_len += pbuf_copy_partial(p, state->buffer_recv + state->recv_len,
+                                             p->tot_len > buffer_left ? buffer_left : p->tot_len, 0);
+        tcp_recved(tpcb, p->tot_len);
+    }
+    pbuf_free(p);
+
+    //Check if the whole buffer is received
+    if (state->recv_len == BUF_SIZE_RECV) {
+        printf("Received Buffer: %c\n", state->buffer_recv[0]);
+    }
+
+    state->recv_len = 0;
+
+    return ERR_OK;
+
+}
 
 /**
  * Function for sending data to client
 */
-err_t tcp_server_send_data(void *arg, struct tcp_pcb *tpcb) {
+err_t tcp_server_send_data(void *arg, struct tcp_pcb *tpcb, uint8_t data) {
     TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
 
     //Prepare data to be sent
-    memcpy(state->buffer_sent, "b", BUF_SIZE_SENT);
+    memcpy(state->buffer_sent, &data, BUF_SIZE_SENT);
 
     state->sent_len = 0;
     printf("Writing %ld bytes to client\n", BUF_SIZE_SENT);
@@ -144,7 +224,7 @@ err_t tcp_server_send_data(void *arg, struct tcp_pcb *tpcb) {
 */
 err_t tcp_server_poll(void *arg, struct tcp_pcb *tpcb) {
     printf("tcp_server_poll_fn\n");
-    return tcp_server_result(arg, -1); // no response is an error?
+    return tcp_server_result(arg, 0); // no response is no error?
 }
 
 /**
@@ -170,7 +250,7 @@ err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
     tcp_arg(client_pcb, state);
     tcp_sent(client_pcb, tcp_server_sent);
     tcp_recv(client_pcb, tcp_server_recv);
-    //tcp_poll(client_pcb, tcp_server_poll, POLL_TIME_S * 2); //Uncomment for timeout on response from client.
+    tcp_poll(client_pcb, tcp_server_poll, POLL_TIME_S); //Uncomment for timeout on response from client.
     tcp_err(client_pcb, tcp_server_err);
 
     return ERR_OK;
@@ -228,47 +308,4 @@ TCP_SERVER_T* run_tcp_server() {
         return NULL;
     }
     return state; 
-}
-
-int main() {
-    stdio_init_all();
-
-    sleep_ms(10000); //To have time to open serial monitor
-
-    if (cyw43_arch_init()) {
-        printf("failed to initialise CYW43 architecture\n");
-        return 1;
-    }
-
-    cyw43_arch_enable_sta_mode(); //Enable wifi station mode
-
-    printf("Connecting to Wi-Fi...\n");
-    if (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 30000)) {
-        printf("failed to connect.\n");
-        return 1;
-    } else {
-        printf("Connected.\n");
-    }
-
-    TCP_SERVER_T *state = run_tcp_server();
-     if (!state) {
-        printf("Failed to run TCP server");
-        return 1;
-    }
-
-    while(1) {
-        printf("Hello\n");
-        sleep_ms(500);
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-        sleep_ms(500);
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
-
-        if (state->client_pcb != NULL) {
-            tcp_server_send_data(state, state->client_pcb);
-        }
-    }
-
-    cyw43_arch_deinit();
-
-    return 0;
 }
