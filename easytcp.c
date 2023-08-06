@@ -64,7 +64,7 @@ err_t tcp_client_close(void *arg) {
         tcp_err(state->client_pcb, NULL);
         err = tcp_close(state->client_pcb);
         if (err != ERR_OK) {
-            DEBUG_printf("close failed %d, calling abort\n", err);
+            printf("close failed %d, calling abort\n", err);
             tcp_abort(state->client_pcb);
             err = ERR_ABRT;
         }
@@ -88,7 +88,7 @@ err_t tcp_server_result(void *arg, int status) {
     if (status == 0) {
         printf("Closed tcp server succesfully\n");
     } else {
-        printf("Something failed %d\n", status);
+        printf("Something failed or client disconnected %d\n", status);
     }
     return tcp_client_close(arg);
 }
@@ -105,7 +105,7 @@ err_t tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t len) {
 
         // We should get the data back from the client
         state->recv_len = 0;
-        printf("Waiting for buffer from client\n");
+        printf("Waiting for buffer from client?\n");
     }
 
     return ERR_OK;
@@ -157,7 +157,7 @@ void tcp_server_err(void *arg, err_t err) {
     }
 }
 
-void tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
+err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
     TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
     if (err != ERR_OK || client_pcb == NULL) {
         printf("Failure in accept\n");
@@ -172,6 +172,8 @@ void tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
     tcp_recv(client_pcb, tcp_server_recv);
     //tcp_poll(client_pcb, tcp_server_poll, POLL_TIME_S * 2); //Uncomment for timeout on response from client.
     tcp_err(client_pcb, tcp_server_err);
+
+    return ERR_OK;
 
     //Attempt to write this function without returning err_t
     //return tcp_server_send_data(arg, state->client_pcb);
@@ -230,6 +232,8 @@ TCP_SERVER_T* run_tcp_server() {
 
 int main() {
     stdio_init_all();
+
+    sleep_ms(10000); //To have time to open serial monitor
 
     if (cyw43_arch_init()) {
         printf("failed to initialise CYW43 architecture\n");
