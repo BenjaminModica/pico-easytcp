@@ -12,7 +12,15 @@ int main() {
 
     while(1) {
         sleep_ms(500);
-        uint8_t data = 0x25;
-        easytcp_send_data(easytcp_state, data);
+        //uint8_t data = 0x25;
+        //easytcp_send_data(easytcp_state, data);
+
+        //Test ringbuffer here
+
+        /*
+        if (easytcp_data_received()) {
+            easytcp_transfer_data();
+        }
+        */
     }
 }

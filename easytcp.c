@@ -15,22 +15,6 @@
 #include "secrets.h"
 
 /**
- * De-initialize easytcp, what more to do? 
-*/
-int easytcp_deinit(void *arg) {
-    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
-
-    if (state->server_pcb) {
-        tcp_arg(state->server_pcb, NULL);
-        tcp_close(state->server_pcb);
-        state->server_pcb = NULL;
-    }
-
-    cyw43_arch_deinit();
-    free(state);
-}
-
-/**
  * Init for easytcp library and settings
 */
 TCP_SERVER_T* easytcp_init() {
@@ -57,6 +41,70 @@ TCP_SERVER_T* easytcp_init() {
     }
     
     return state;
+}
+
+/**
+ * De-initialize easytcp, what more to do? 
+*/
+int easytcp_deinit(void *arg) {
+    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+
+    if (state->server_pcb) {
+        tcp_arg(state->server_pcb, NULL);
+        tcp_close(state->server_pcb);
+        state->server_pcb = NULL;
+    }
+
+    cyw43_arch_deinit();
+    free(state);
+}
+
+/**
+ * For putting received data in ringbuffer.
+ * If buffer overflows it should start placing data in 
+ * the beginning of the array again. 
+ * 
+ * Increments ringbuf write with one for each data
+ * 
+ * @param arg Pointer to tcp state structure
+ * @param data Data to store in buffer
+*/
+void put_ringbuffer(void *arg, uint8_t data) {
+    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+
+    state->ringbuf_write++;
+    if (state->ringbuf_write >= RINGBUF_SIZE) {
+        state->ringbuf_write = 0;
+    } 
+
+    state->ringbuffer[state->ringbuf_write] = data;
+}
+
+/**
+ * For reading the data in the ringbuffer, emptying it. Should reset ringbuffer.
+ * 
+ * Will read out the data until read pointer has reached write pointer 
+ * 
+ * @param arg Pointer to tcp state structure
+ * @param data Pointer to array in which data gets returned
+ * 
+ * @returns pointer to array with all data from ringbuffer
+*/
+uint8_t* read_ringbuffer(void *arg, uint8_t *data) {
+    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+
+    int i = 0;
+    while(state->ringbuf_read != state->ringbuf_write) {
+
+        if (state->ringbuf_read >= RINGBUF_SIZE) {
+            state->ringbuf_read = 0;
+        }
+
+        data[i] = state->ringbuffer[state->ringbuf_read];
+        i++;
+    }
+
+    return data;
 }
 
 /**
@@ -163,6 +211,8 @@ err_t tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t len) {
 
 /**
  * Callback function when data has been received
+ * 
+ * Currently can only manage to receive one byte at a time. Could be extended in future.
 */
 err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err) {
     TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
@@ -189,6 +239,8 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
     if (state->recv_len == BUF_SIZE_RECV) {
         printf("Received Buffer: %c\n", state->buffer_recv[0]);
     }
+
+    put_ringbuffer(state, state->buffer_recv[0]);
 
     state->recv_len = 0;
 

@@ -21,6 +21,7 @@
 #define TCP_PORT 4242
 #define BUF_SIZE_SENT 1
 #define BUF_SIZE_RECV 1
+#define RINGBUF_SIZE 128
 #define POLL_TIME_S 255
 
 extern char WIFI_PASSWORD[];
@@ -34,15 +35,36 @@ typedef struct TCP_SERVER_T_ {
     int sent_len;
     int recv_len;
     int run_count;
+    uint8_t ringbuffer[128];
+    int ringbuf_write;
+    int ringbuf_read; 
 } TCP_SERVER_T;
+
+/*
+Need some type of FIFO queue for data that has been received from client
+
+Make an array with max limit of 2048 (ex)
+Have two pointers one for beginning and one for end
+When data is requested to transfer: transfer data then reset array. 
+
+Lägg till receive data på något snyggt sätt med buffer. 
+Kan använda ringbuffer där man har write och read pointers. 
+Write++ vid write till buffer och read++ vid read av buffer, 
+sen while tills write=read. Om write>bufsize så börjar om på noll. 
+*/
 
 //TCP_SERVER_T *tcp_server_ptr;
 
+TCP_SERVER_T* easytcp_init();
+
+void put_ringbuffer(void *arg, uint8_t data);
+uint8_t* read_ringbuffer(void *arg, uint8_t *data);
+
+int easytcp_deinit(void *arg);
 bool easytcp_send_data(void *arg, uint8_t data);
+
 bool is_client_connected(void *arg);
 TCP_SERVER_T* tcp_server_init();
-int easytcp_deinit(void *arg);
-TCP_SERVER_T* easytcp_init();
 err_t tcp_client_close(void *arg);
 err_t tcp_server_result(void *arg, int status);
 err_t tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t len);
