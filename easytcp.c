@@ -8,7 +8,7 @@
  * 
  * Based on pico-examples from Raspberry Pi
  * 
- * Written by: Benjamin Modica 2023
+ * Author: Benjamin Modica 2023
  */
 
 #include "easytcp.h"
@@ -16,6 +16,8 @@
 
 /**
  * Init for easytcp library and settings
+ * 
+ * @returns ptr to tcp state structure. Used as param for all easytcp functions.
 */
 TCP_SERVER_T* easytcp_init() {
 
@@ -60,6 +62,54 @@ int easytcp_deinit(void *arg) {
 
     cyw43_arch_deinit();
     free(state);
+
+    return 0;
+}
+
+/**
+ * Function for sending data to client
+ * 
+ * @returns true if data was sent
+ * @returns false if no client is connected
+*/
+bool easytcp_send_data(void *arg, uint8_t data) {
+    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+    if (is_client_connected(state)){
+        tcp_server_send_data(state, state->client_pcb, data);
+        return true;
+    } else {
+        printf("No client connected, cannot send data\n");
+        return false;
+    }
+}
+
+/**
+ * For reading the data in the ringbuffer, emptying it. Should reset ringbuffer.
+ * 
+ * Will read out the data until read pointer has reached write pointer 
+ * 
+ * @param arg Pointer to tcp state structure
+ * @param data Pointer to array in which data gets returned
+ * 
+ * @returns How many bytes of data has been written
+*/
+int easytcp_receive_data(void *arg, uint8_t *data) {
+    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
+
+    //Empty ringbuffer into data
+    int i = 0;
+    while(state->ringbuf_read != state->ringbuf_write) {
+
+        if (state->ringbuf_read >= RINGBUF_SIZE) {
+            state->ringbuf_read = 0;
+        }
+
+        data[i] = state->ringbuffer[state->ringbuf_read];
+        state->ringbuf_read++;
+        i++;
+    }
+
+    return i;
 }
 
 /**
@@ -86,49 +136,27 @@ void put_ringbuffer(void *arg, uint8_t data) {
 }
 
 /**
- * For reading the data in the ringbuffer, emptying it. Should reset ringbuffer.
- * 
- * Will read out the data until read pointer has reached write pointer 
- * 
- * @param arg Pointer to tcp state structure
- * @param data Pointer to array in which data gets returned
- * 
- * @returns How many bytes of data has been written
-*/
-int read_ringbuffer(void *arg, uint8_t *data) {
-    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
-
-    //Empty ringbuffer into data
-    int i = 0;
-    while(state->ringbuf_read != state->ringbuf_write) {
-
-        if (state->ringbuf_read >= RINGBUF_SIZE) {
-            state->ringbuf_read = 0;
-        }
-
-        data[i] = state->ringbuffer[state->ringbuf_read];
-        state->ringbuf_read++;
-        i++;
-    }
-
-    return i;
-}
-
-/**
  * Function for sending data to client
- * 
- * Returns true if data was sent
- * Returns false if no client is connected to receive data
 */
-bool easytcp_send_data(void *arg, uint8_t data) {
+err_t tcp_server_send_data(void *arg, struct tcp_pcb *tpcb, uint8_t data) {
     TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
-    if (is_client_connected(state)){
-        tcp_server_send_data(state, state->client_pcb, data);
-        return true;
-    } else {
-        printf("No client connected, cannot send data\n");
-        return false;
+
+    //Prepare data to be sent
+    memcpy(state->buffer_sent, &data, BUF_SIZE_SENT);
+    //memcpy(state->buffer_sent, 'b', BUF_SIZE_SENT);
+
+    state->sent_len = 0;
+    printf("Writing %ld bytes to client\n", BUF_SIZE_SENT);
+    // this method is callback from lwIP, so cyw43_arch_lwip_begin is not required, however you
+    // can use this method to cause an assertion in debug mode, if this method is called when
+    // cyw43_arch_lwip_begin IS needed
+    cyw43_arch_lwip_check();
+    err_t err = tcp_write(tpcb, state->buffer_sent, BUF_SIZE_SENT, TCP_WRITE_FLAG_COPY);
+    if (err != ERR_OK) {
+        printf("Failed to write data %d\n", err);
+        return tcp_server_result(arg, -1);
     }
+    return ERR_OK;
 }
 
 bool is_client_connected(void *arg) {
@@ -255,29 +283,6 @@ err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err
 }
 
 /**
- * Function for sending data to client
-*/
-err_t tcp_server_send_data(void *arg, struct tcp_pcb *tpcb, uint8_t data) {
-    TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
-
-    //Prepare data to be sent
-    memcpy(state->buffer_sent, &data, BUF_SIZE_SENT);
-
-    state->sent_len = 0;
-    printf("Writing %ld bytes to client\n", BUF_SIZE_SENT);
-    // this method is callback from lwIP, so cyw43_arch_lwip_begin is not required, however you
-    // can use this method to cause an assertion in debug mode, if this method is called when
-    // cyw43_arch_lwip_begin IS needed
-    cyw43_arch_lwip_check();
-    err_t err = tcp_write(tpcb, state->buffer_sent, BUF_SIZE_SENT, TCP_WRITE_FLAG_COPY);
-    if (err != ERR_OK) {
-        printf("Failed to write data %d\n", err);
-        return tcp_server_result(arg, -1);
-    }
-    return ERR_OK;
-}
-
-/**
  * Callback function for timeout when polling client
 */
 err_t tcp_server_poll(void *arg, struct tcp_pcb *tpcb) {
@@ -308,7 +313,7 @@ err_t tcp_server_accept(void *arg, struct tcp_pcb *client_pcb, err_t err) {
     tcp_arg(client_pcb, state);
     tcp_sent(client_pcb, tcp_server_sent);
     tcp_recv(client_pcb, tcp_server_recv);
-    tcp_poll(client_pcb, tcp_server_poll, POLL_TIME_S); //Uncomment for timeout on response from client.
+    //tcp_poll(client_pcb, tcp_server_poll, POLL_TIME_S); //Uncomment for polling before sending data.
     tcp_err(client_pcb, tcp_server_err);
 
     return ERR_OK;
