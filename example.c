@@ -11,11 +11,17 @@ int main() {
     TCP_SERVER_T *easytcp_state = easytcp_init();
 
     while(1) {
-        sleep_ms(500);
-        //uint8_t data = 0x25;
-        //easytcp_send_data(easytcp_state, data);
+        sleep_ms(10000);
+        uint8_t data = 0x24;
+        easytcp_send_data(easytcp_state, data);
 
         //Test ringbuffer here
+        uint8_t recv_data[128];
+        int nbr_of_data = read_ringbuffer(easytcp_state, recv_data);
+
+        for (int i = 0; i < nbr_of_data; i++) {
+            printf("Data at %d: %c\n", i, recv_data[i]);
+        }
 
         /*
         if (easytcp_data_received()) {

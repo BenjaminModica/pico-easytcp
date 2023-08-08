@@ -39,6 +39,9 @@ TCP_SERVER_T* easytcp_init() {
         printf("Failed to run TCP server");
         return NULL;
     }
+
+    state->ringbuf_read = 0;
+    state->ringbuf_write = 0;
     
     return state;
 }
@@ -64,7 +67,10 @@ int easytcp_deinit(void *arg) {
  * If buffer overflows it should start placing data in 
  * the beginning of the array again. 
  * 
- * Increments ringbuf write with one for each data
+ * Increments ringbuf write with one for each data.
+ * 
+ * Data will be overwritten if it comes full circuit without being emptied. 
+ * So this will only save the latest RINGBUF_SIZE entries which is fine for my use cases. 
  * 
  * @param arg Pointer to tcp state structure
  * @param data Data to store in buffer
@@ -72,12 +78,11 @@ int easytcp_deinit(void *arg) {
 void put_ringbuffer(void *arg, uint8_t data) {
     TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
 
+    state->ringbuffer[state->ringbuf_write] = data;
     state->ringbuf_write++;
     if (state->ringbuf_write >= RINGBUF_SIZE) {
         state->ringbuf_write = 0;
     } 
-
-    state->ringbuffer[state->ringbuf_write] = data;
 }
 
 /**
@@ -88,11 +93,12 @@ void put_ringbuffer(void *arg, uint8_t data) {
  * @param arg Pointer to tcp state structure
  * @param data Pointer to array in which data gets returned
  * 
- * @returns pointer to array with all data from ringbuffer
+ * @returns How many bytes of data has been written
 */
-uint8_t* read_ringbuffer(void *arg, uint8_t *data) {
+int read_ringbuffer(void *arg, uint8_t *data) {
     TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
 
+    //Empty ringbuffer into data
     int i = 0;
     while(state->ringbuf_read != state->ringbuf_write) {
 
@@ -101,10 +107,11 @@ uint8_t* read_ringbuffer(void *arg, uint8_t *data) {
         }
 
         data[i] = state->ringbuffer[state->ringbuf_read];
+        state->ringbuf_read++;
         i++;
     }
 
-    return data;
+    return i;
 }
 
 /**
@@ -193,6 +200,8 @@ err_t tcp_server_result(void *arg, int status) {
 
 /**
  * Callback function when data has been sent
+ * 
+ * This is just unneccesary now, might be useful later.
 */
 err_t tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t len) {
     TCP_SERVER_T *state = (TCP_SERVER_T*)arg;
@@ -200,10 +209,7 @@ err_t tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t len) {
     state->sent_len += len;
 
     if (state->sent_len >= BUF_SIZE_SENT) {
-
-        // We should get the data back from the client
         state->recv_len = 0;
-        printf("Waiting for buffer from client?\n");
     }
 
     return ERR_OK;

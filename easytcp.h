@@ -58,7 +58,7 @@ sen while tills write=read. Om write>bufsize så börjar om på noll.
 TCP_SERVER_T* easytcp_init();
 
 void put_ringbuffer(void *arg, uint8_t data);
-uint8_t* read_ringbuffer(void *arg, uint8_t *data);
+int read_ringbuffer(void *arg, uint8_t *data);
 
 int easytcp_deinit(void *arg);
 bool easytcp_send_data(void *arg, uint8_t data);
