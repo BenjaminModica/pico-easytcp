@@ -13,7 +13,13 @@ int main() {
     while(1) {
         sleep_ms(10000);
         uint8_t data = 0x24;
-        easytcp_send_data(easytcp_state, data);
+        bool sent = easytcp_send_data(easytcp_state, data);
+
+        if (sent) {
+            printf("Data sent: 0x%x\n", data);
+        } else {
+            printf("Data not sent, no client connected to server\n");
+        }
 
         uint8_t recv_data[128];
         int nbr_of_data = easytcp_receive_data(easytcp_state, recv_data);
